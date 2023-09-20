@@ -322,14 +322,10 @@ pub struct ChainSync<B: BlockT, Client> {
 	network_service: service::network::NetworkServiceHandle,
 	/// Protocol name used for block announcements
 	block_announce_protocol_name: ProtocolName,
-	/// Block downloader stub
-	block_downloader: Arc<dyn BlockDownloader<B>>,
 	/// Protocol name used to send out state requests
 	state_request_protocol_name: ProtocolName,
 	/// Protocol name used to send out warp sync requests
 	warp_sync_protocol_name: Option<ProtocolName>,
-	/// Pending responses
-	pending_responses: HashMap<PeerId, PendingResponse<B>>,
 	/// Handle to import queue.
 	import_queue: Box<dyn ImportQueueService<B>>,
 	/// Metrics.
@@ -489,10 +485,6 @@ where
 
 	fn num_peers(&self) -> usize {
 		self.peers.len()
-	}
-
-	fn num_active_peers(&self) -> usize {
-		self.pending_responses.len()
 	}
 
 	fn new_peer(
@@ -1168,32 +1160,6 @@ where
 			justifications: self.extra_justifications.metrics(),
 		}
 	}
-
-	fn poll(&mut self, cx: &mut std::task::Context) -> Poll<()> {
-		self.process_outbound_requests();
-
-		self.poll_pending_responses(cx)
-	}
-
-	fn send_block_request(&mut self, who: PeerId, request: BlockRequest<B>) {
-		if !self.is_peer_known(&who) {
-			trace!(target: LOG_TARGET, "Cannot send block request to unknown peer {who}");
-			debug_assert!(false);
-			return
-		}
-
-		let downloader = self.block_downloader.clone();
-		self.pending_responses.insert(
-			who,
-			Box::pin(async move {
-				(
-					who,
-					PeerRequest::Block(request.clone()),
-					downloader.download_blocks(who, request).await,
-				)
-			}),
-		);
-	}
 }
 
 impl<B, Client> ChainSync<B, Client>
@@ -1221,7 +1187,6 @@ where
 		metrics_registry: Option<&Registry>,
 		network_service: service::network::NetworkServiceHandle,
 		import_queue: Box<dyn ImportQueueService<B>>,
-		block_downloader: Arc<dyn BlockDownloader<B>>,
 		state_request_protocol_name: ProtocolName,
 		warp_sync_protocol_name: Option<ProtocolName>,
 	) -> Result<(Self, NonDefaultSetConfig), ClientError> {
@@ -1257,7 +1222,6 @@ where
 			import_existing: false,
 			gap_sync: None,
 			network_service,
-			block_downloader,
 			state_request_protocol_name,
 			warp_sync_config,
 			warp_sync_target_block_header: None,
@@ -1266,7 +1230,6 @@ where
 				.notifications_protocol
 				.clone()
 				.into(),
-			pending_responses: HashMap::new(),
 			import_queue,
 			metrics: if let Some(r) = &metrics_registry {
 				match SyncingMetrics::register(r) {
@@ -1635,73 +1598,6 @@ where
 		}
 	}
 
-	fn decode_state_response(response: &[u8]) -> Result<OpaqueStateResponse, String> {
-		let response = StateResponse::decode(response)
-			.map_err(|error| format!("Failed to decode state response: {error}"))?;
-
-		Ok(OpaqueStateResponse(Box::new(response)))
-	}
-
-	fn send_state_request(&mut self, who: PeerId, request: OpaqueStateRequest) {
-		if !self.is_peer_known(&who) {
-			trace!(target: LOG_TARGET, "Cannot send state request to unknown peer {who}");
-			debug_assert!(false);
-			return
-		}
-
-		let (tx, rx) = oneshot::channel();
-
-		self.pending_responses
-			.insert(who, Box::pin(async move { (who, PeerRequest::State, rx.await) }));
-
-		match self.encode_state_request(&request) {
-			Ok(data) => {
-				self.network_service.start_request(
-					who,
-					self.state_request_protocol_name.clone(),
-					data,
-					tx,
-					IfDisconnected::ImmediateError,
-				);
-			},
-			Err(err) => {
-				log::warn!(
-					target: LOG_TARGET,
-					"Failed to encode state request {request:?}: {err:?}",
-				);
-			},
-		}
-	}
-
-	fn send_warp_sync_request(&mut self, who: PeerId, request: WarpProofRequest<B>) {
-		if !self.is_peer_known(&who) {
-			trace!(target: LOG_TARGET, "Cannot send warp proof request to unknown peer {who}");
-			debug_assert!(false);
-			return
-		}
-
-		let (tx, rx) = oneshot::channel();
-
-		self.pending_responses
-			.insert(who, Box::pin(async move { (who, PeerRequest::WarpProof, rx.await) }));
-
-		match &self.warp_sync_protocol_name {
-			Some(name) => self.network_service.start_request(
-				who,
-				name.clone(),
-				request.encode(),
-				tx,
-				IfDisconnected::ImmediateError,
-			),
-			None => {
-				log::warn!(
-					target: LOG_TARGET,
-					"Trying to send warp sync request when no protocol is configured {request:?}",
-				);
-			},
-		}
-	}
-
 	pub(crate) fn on_block_response(
 		&mut self,
 		peer_id: PeerId,
@@ -1780,159 +1676,6 @@ where
 				.disconnect_peer(id, self.block_announce_protocol_name.clone());
 			self.network_service.report_peer(id, repu);
 		}
-	}
-
-	fn process_outbound_requests(&mut self) {
-		for (id, request) in self.block_requests() {
-			self.send_block_request(id, request);
-		}
-
-		if let Some((id, request)) = self.state_request() {
-			self.send_state_request(id, request);
-		}
-
-		for (id, request) in self.justification_requests() {
-			self.send_block_request(id, request);
-		}
-
-		if let Some((id, request)) = self.warp_sync_request() {
-			self.send_warp_sync_request(id, request);
-		}
-	}
-
-	fn poll_pending_responses(&mut self, cx: &mut std::task::Context) -> Poll<()> {
-		let ready_responses = self
-			.pending_responses
-			.values_mut()
-			.filter_map(|future| match future.poll_unpin(cx) {
-				Poll::Pending => None,
-				Poll::Ready(result) => Some(result),
-			})
-			.collect::<Vec<_>>();
-
-		for (id, request, response) in ready_responses {
-			self.pending_responses
-				.remove(&id)
-				.expect("Logic error: peer id from pending response is missing in the map.");
-
-			match response {
-				Ok(Ok(resp)) => match request {
-					PeerRequest::Block(req) => {
-						match self.block_downloader.block_response_into_blocks(&req, resp) {
-							Ok(blocks) => {
-								if let Some((peer_id, new_req)) =
-									self.on_block_response(id, req, blocks)
-								{
-									self.send_block_request(peer_id, new_req);
-								}
-							},
-							Err(BlockResponseError::DecodeFailed(e)) => {
-								debug!(
-									target: LOG_TARGET,
-									"Failed to decode block response from peer {:?}: {:?}.",
-									id,
-									e
-								);
-								self.network_service.report_peer(id, rep::BAD_MESSAGE);
-								self.network_service
-									.disconnect_peer(id, self.block_announce_protocol_name.clone());
-								continue
-							},
-							Err(BlockResponseError::ExtractionFailed(e)) => {
-								debug!(
-									target: LOG_TARGET,
-									"Failed to extract blocks from peer response {:?}: {:?}.",
-									id,
-									e
-								);
-								self.network_service.report_peer(id, rep::BAD_MESSAGE);
-								continue
-							},
-						}
-					},
-					PeerRequest::State => {
-						let response = match Self::decode_state_response(&resp[..]) {
-							Ok(proto) => proto,
-							Err(e) => {
-								debug!(
-									target: LOG_TARGET,
-									"Failed to decode state response from peer {id:?}: {e:?}.",
-								);
-								self.network_service.report_peer(id, rep::BAD_MESSAGE);
-								self.network_service
-									.disconnect_peer(id, self.block_announce_protocol_name.clone());
-								continue
-							},
-						};
-
-						self.on_state_response(id, response);
-					},
-					PeerRequest::WarpProof => {
-						self.on_warp_sync_response(id, EncodedProof(resp));
-					},
-				},
-				Ok(Err(e)) => {
-					debug!(target: LOG_TARGET, "Request to peer {id:?} failed: {e:?}.");
-
-					match e {
-						RequestFailure::Network(OutboundFailure::Timeout) => {
-							self.network_service.report_peer(id, rep::TIMEOUT);
-							self.network_service
-								.disconnect_peer(id, self.block_announce_protocol_name.clone());
-						},
-						RequestFailure::Network(OutboundFailure::UnsupportedProtocols) => {
-							self.network_service.report_peer(id, rep::BAD_PROTOCOL);
-							self.network_service
-								.disconnect_peer(id, self.block_announce_protocol_name.clone());
-						},
-						RequestFailure::Network(OutboundFailure::DialFailure) => {
-							self.network_service
-								.disconnect_peer(id, self.block_announce_protocol_name.clone());
-						},
-						RequestFailure::Refused => {
-							self.network_service.report_peer(id, rep::REFUSED);
-							self.network_service
-								.disconnect_peer(id, self.block_announce_protocol_name.clone());
-						},
-						RequestFailure::Network(OutboundFailure::ConnectionClosed) |
-						RequestFailure::NotConnected => {
-							self.network_service
-								.disconnect_peer(id, self.block_announce_protocol_name.clone());
-						},
-						RequestFailure::UnknownProtocol => {
-							debug_assert!(false, "Block request protocol should always be known.");
-						},
-						RequestFailure::Obsolete => {
-							debug_assert!(
-								false,
-								"Can not receive `RequestFailure::Obsolete` after dropping the \
-								 response receiver.",
-							);
-						},
-					}
-				},
-				Err(oneshot::Canceled) => {
-					trace!(
-						target: LOG_TARGET,
-						"Request to peer {id:?} failed due to oneshot being canceled.",
-					);
-					self.network_service
-						.disconnect_peer(id, self.block_announce_protocol_name.clone());
-				},
-			}
-		}
-
-		Poll::Pending
-	}
-
-	fn encode_state_request(&self, request: &OpaqueStateRequest) -> Result<Vec<u8>, String> {
-		let request: &StateRequest = request.0.downcast_ref().ok_or_else(|| {
-			"Failed to downcast opaque state response during encoding, this is an \
-				implementation bug."
-				.to_string()
-		})?;
-
-		Ok(request.encode_to_vec())
 	}
 
 	fn justification_requests(&mut self) -> Vec<(PeerId, BlockRequest<B>)> {
@@ -2835,7 +2578,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)
@@ -2902,7 +2644,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)
@@ -3076,7 +2817,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)
@@ -3202,7 +2942,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)
@@ -3359,7 +3098,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)
@@ -3501,7 +3239,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)
@@ -3645,7 +3382,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)
@@ -3690,7 +3426,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)
@@ -3742,7 +3477,6 @@ mod test {
 			None,
 			chain_sync_network_handle,
 			import_queue,
-			Arc::new(MockBlockDownloader::new()),
 			ProtocolName::from("state-request"),
 			None,
 		)

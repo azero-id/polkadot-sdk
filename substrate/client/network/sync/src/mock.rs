@@ -39,7 +39,6 @@ mockall::mock! {
 		fn num_sync_requests(&self) -> usize;
 		fn num_downloaded_blocks(&self) -> usize;
 		fn num_peers(&self) -> usize;
-		fn num_active_peers(&self) -> usize;
 		fn new_peer(
 			&mut self,
 			who: PeerId,
@@ -81,15 +80,6 @@ mockall::mock! {
 		);
 		fn peer_disconnected(&mut self, who: &PeerId);
 		fn metrics(&self) -> Metrics;
-		fn poll<'a>(
-			&mut self,
-			cx: &mut std::task::Context<'a>,
-		) -> Poll<()>;
-		fn send_block_request(
-			&mut self,
-			who: PeerId,
-			request: BlockRequest<Block>,
-		);
 	}
 }
 

@@ -432,7 +432,6 @@ where
 			metrics_registry,
 			network_service.clone(),
 			import_queue,
-			block_downloader.clone(),
 			state_request_protocol_name.clone(),
 			warp_sync_protocol_name.clone(),
 		)?;
@@ -725,7 +724,7 @@ where
 				ToServiceCommand::BlocksProcessed(imported, count, results) => {
 					for result in self.chain_sync.on_blocks_processed(imported, count, results) {
 						match result {
-							Ok((id, req)) => self.chain_sync.send_block_request(id, req),
+							Ok((id, req)) => self.send_block_request(id, req),
 							Err(BadPeer(id, repu)) => {
 								self.network_service
 									.disconnect_peer(id, self.block_announce_protocol_name.clone());
@@ -758,7 +757,7 @@ where
 					let _ = tx.send(status);
 				},
 				ToServiceCommand::NumActivePeers(tx) => {
-					let _ = tx.send(self.chain_sync.num_active_peers());
+					let _ = tx.send(self.num_active_peers());
 				},
 				ToServiceCommand::SyncState(tx) => {
 					let _ = tx.send(self.chain_sync.status());
@@ -1037,7 +1036,7 @@ where
 		}
 
 		if let Some(req) = req {
-			self.chain_sync.send_block_request(peer_id, req);
+			self.send_block_request(peer_id, req);
 		}
 
 		self.event_streams
@@ -1284,5 +1283,10 @@ where
 		}
 
 		Poll::Pending
+	}
+
+	/// Returns the number of peers we're connected to and that are being queried.
+	fn num_active_peers(&self) -> usize {
+		self.pending_responses.len()
 	}
 }
