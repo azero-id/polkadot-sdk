@@ -1,0 +1,28 @@
+[package]
+name = "demo"
+version = "0.1.0"
+authors = ["AZERO.ID <hello@azero.id>"]
+edition = "2021"
+
+[dependencies]
+ink = { version = "4.3.0", default-features = false, features = ["call-runtime"] }
+xcm = { package = "staging-xcm", git = "https://github.com/paritytech/polkadot-sdk", default-features = false, branch = "release-polkadot-v1.1.0" }
+
+utils = { path = "../utils", default-features = false}
+
+scale = { package = "parity-scale-codec", version = "3", default-features = false, features = ["derive"] }
+scale-info = { version = "2.6", default-features = false, features = ["derive"], optional = true }
+
+[lib]
+path = "lib.rs"
+
+[features]
+default = ["std"]
+std = [
+    "ink/std",
+    "scale/std",
+    "scale-info/std",
+    "utils/std",
+    "xcm/std",
+]
+ink-as-dependency = []

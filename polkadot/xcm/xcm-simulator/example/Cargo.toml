@@ -31,6 +31,15 @@ polkadot-core-primitives = { path = "../../../core-primitives" }
 polkadot-runtime-parachains = { path = "../../../runtime/parachains" }
 polkadot-parachain-primitives = { path = "../../../parachain" }
 
+pallet-insecure-randomness-collective-flip = { path = "../../../../substrate/frame/insecure-randomness-collective-flip" }
+pallet-timestamp = { path = "../../../../substrate/frame/timestamp" }
+pallet-transaction-payment = { path = "../../../../substrate/frame/transaction-payment" }
+pallet-contracts = { path = "../../../../substrate/frame/contracts" }
+
+[dev-dependencies]
+pallet-contracts-primitives = { path = "../../../../substrate/frame/contracts/primitives" }
+
+
 [features]
 default = []
 runtime-benchmarks = [

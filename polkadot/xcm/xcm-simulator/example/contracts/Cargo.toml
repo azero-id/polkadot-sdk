@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "utils",
+    "demo",
+    "xc_demo",
+]
