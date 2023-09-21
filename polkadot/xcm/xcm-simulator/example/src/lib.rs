@@ -17,6 +17,9 @@
 mod parachain;
 mod relay_chain;
 
+#[cfg(test)]
+mod xcm_call_runtime;
+
 use sp_runtime::BuildStorage;
 use sp_tracing;
 use xcm::prelude::*;
@@ -137,6 +140,7 @@ pub fn relay_ext() -> sp_io::TestExternalities {
 
 pub type RelayChainPalletXcm = pallet_xcm::Pallet<relay_chain::Runtime>;
 pub type ParachainPalletXcm = pallet_xcm::Pallet<parachain::Runtime>;
+pub type ParachainContracts = pallet_contracts::Pallet<parachain::Runtime>;
 
 #[cfg(test)]
 mod tests {

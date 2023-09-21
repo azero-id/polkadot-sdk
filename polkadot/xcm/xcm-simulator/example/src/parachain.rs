@@ -107,7 +107,7 @@ impl pallet_balances::Config for Runtime {
 	type ReserveIdentifier = [u8; 8];
 	type RuntimeHoldReason = RuntimeHoldReason;
 	type FreezeIdentifier = ();
-	type MaxHolds = ConstU32<0>;
+	type MaxHolds = ConstU32<8>;
 	type MaxFreezes = ConstU32<0>;
 }
 
@@ -447,6 +447,62 @@ impl pallet_xcm::Config for Runtime {
 	type AdminOrigin = EnsureRoot<AccountId>;
 }
 
+impl pallet_insecure_randomness_collective_flip::Config for Runtime {}
+
+impl pallet_timestamp::Config for Runtime {
+	type Moment = u64;
+	type OnTimestampSet = ();
+	type MinimumPeriod = sp_core::ConstU64<1>;
+	type WeightInfo = ();
+}
+
+use frame_support::weights::IdentityFee;
+impl pallet_transaction_payment::Config for Runtime {
+	type RuntimeEvent = RuntimeEvent;
+	type OnChargeTransaction = pallet_transaction_payment::CurrencyAdapter<Balances, ()>;
+	type OperationalFeeMultiplier = sp_core::ConstU8<5>;
+	type WeightToFee = IdentityFee<Balance>;
+	type LengthToFee = IdentityFee<Balance>;
+	type FeeMultiplierUpdate = ();
+}
+
+parameter_types! {
+	pub const DepositPerItem: Balance = 2;
+	pub const DepositPerByte: Balance = 1;
+	pub const CodeHashLockupDepositPercent: sp_runtime::Perbill = sp_runtime::Perbill::from_percent(0);
+    pub Schedule: pallet_contracts::Schedule<Runtime> = Default::default();
+}
+
+impl pallet_contracts::Config for Runtime {
+	type Time = Timestamp;
+	type Randomness = RandomnessCollectiveFlip;
+	type Currency = Balances;
+	type RuntimeEvent = RuntimeEvent;
+	type RuntimeCall = RuntimeCall;
+
+	type CallFilter = frame_support::traits::Everything;
+	type WeightPrice = pallet_transaction_payment::Pallet<Self>;
+    type WeightInfo = pallet_contracts::weights::SubstrateWeight<Self>;
+	type ChainExtension = ();
+    type Schedule = Schedule;
+    type CallStack = [pallet_contracts::Frame<Self>; 8];
+    type DepositPerByte = DepositPerByte;
+    type DefaultDepositLimit = sp_core::ConstU128<{ u128::MAX }>;
+    type DepositPerItem = DepositPerItem;
+	type AddressGenerator = pallet_contracts::DefaultAddressGenerator;
+	type MaxCodeLen = ConstU32<{ 64 * 1024 }>;
+	type MaxStorageKeyLen = ConstU32<128>;
+    type UnsafeUnstableInterface = sp_core::ConstBool<true>;
+    type MaxDebugBufferLen = ConstU32<{ 2 * 1024 * 1024 }>;
+
+	type CodeHashLockupDepositPercent = CodeHashLockupDepositPercent;
+	type MaxDelegateDependencies = ConstU32<32>;
+	type RuntimeHoldReason = RuntimeHoldReason;
+	type Migrations = ();
+	type Debug = ();
+	type Environment = ();
+}
+
 type Block = frame_system::mocking::MockBlock<Runtime>;
 
 construct_runtime!(
@@ -455,7 +511,11 @@ construct_runtime!(
 		System: frame_system::{Pallet, Call, Storage, Config<T>, Event<T>},
 		Balances: pallet_balances::{Pallet, Call, Storage, Config<T>, Event<T>},
 		MsgQueue: mock_msg_queue::{Pallet, Storage, Event<T>},
-		PolkadotXcm: pallet_xcm::{Pallet, Call, Event<T>, Origin},
+		PolkadotXcm: pallet_xcm::{Pallet, Call, Event<T>, Origin} = 99,
 		ForeignUniques: pallet_uniques::{Pallet, Call, Storage, Event<T>},
+		Timestamp: pallet_timestamp,
+		RandomnessCollectiveFlip: pallet_insecure_randomness_collective_flip,
+		TransactionPayment: pallet_transaction_payment,
+		Contracts: pallet_contracts = 70,
 	}
 );
