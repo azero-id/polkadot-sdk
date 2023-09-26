@@ -20904,6 +20904,8 @@ dependencies = [
  "staging-xcm",
  "staging-xcm-builder",
  "staging-xcm-executor",
+ "tracing",
+ "tracing-subscriber 0.3.17",
  "xcm-simulator",
 ]
 

@@ -19,6 +19,8 @@ mod relay_chain;
 
 #[cfg(test)]
 mod xcm_call_runtime;
+#[cfg(test)]
+mod xcm_domains;
 
 use sp_runtime::BuildStorage;
 use sp_tracing;

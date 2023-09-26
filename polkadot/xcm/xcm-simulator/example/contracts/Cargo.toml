@@ -3,4 +3,7 @@ members = [
     "utils",
     "demo",
     "xc_demo",
+    "who_am_i",
+    "handler_who_am_i",
+    "xc_who_am_i",
 ]

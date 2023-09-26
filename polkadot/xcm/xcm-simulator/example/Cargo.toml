@@ -38,7 +38,8 @@ pallet-contracts = { path = "../../../../substrate/frame/contracts" }
 
 [dev-dependencies]
 pallet-contracts-primitives = { path = "../../../../substrate/frame/contracts/primitives" }
-
+tracing = { version = "0.1.37" }
+tracing-subscriber = { version = "0.3.16", features = ["env-filter", "tracing-log"] }
 
 [features]
 default = []
